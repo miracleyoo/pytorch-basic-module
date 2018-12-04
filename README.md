@@ -2,6 +2,10 @@
 
 A wrapped basic model class for pytorch models. You can Inherit it to make your model easier to use. It contains methods such as load, save, multi-thread save, parallel distribution, train, validate, predict and so on. 
 
+## Usage
+
+Generally, you will inherit **nn.module** class when you define your own net, when you use this library, what you have to change is to inherit **BasicModule** instead. Also, you need to put the **config.py** file and **BasicModule.py** file into your main directory, and import them of course.
+
 ## Functions
 
 ### load
@@ -26,11 +30,6 @@ Save the model with a new thread. You can use this method in stead of self. save
 :param epoch: Current loss.
 :param loss:
 :return: None
-
-### _get_optimizer
-
-Get your optimizer by parsing your opts.
-:return:Optimizer.
 
 ### to_multi
 
