@@ -6,7 +6,6 @@ import os
 import torch
 import shutil
 import torch.nn as nn
-import torch.optim as optim
 import threading
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
@@ -14,6 +13,10 @@ lock = threading.Lock()
 
 
 class MyThread(threading.Thread):
+    """
+        Multi-thread support class. Used for multi-thread model
+        file saving.
+    """
     def __init__(self, opt, net, epoch, bs_old, loss):
         threading.Thread.__init__(self)
         self.opt = opt
@@ -38,6 +41,12 @@ class MyThread(threading.Thread):
 
 
 class BasicModule(nn.Module):
+    """
+        Basic pytorch module class. A wrapped basic model class for pytorch models.
+        You can Inherit it to make your model easier to use. It contains methods
+        such as load, save, multi-thread save, parallel distribution, train, validate,
+        predict and so on.
+    """
     def __init__(self, opt=None, device=None):
         super(BasicModule, self).__init__()
         self.model_name = self.__class__.__name__
@@ -51,7 +60,14 @@ class BasicModule(nn.Module):
             self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.writer = SummaryWriter(opt.SUMMARY_PATH)
 
-    def load(self, model_type="temp_model.dat", map_location=None):
+    def load(self, model_type: str="temp_model.dat", map_location=None)->None:
+        """
+            Load the existing model.
+            :param model_type: temp model or best model.
+            :param map_location: your working environment.
+                For loading the model file dumped from gpu or cpu.
+            :return: None.
+        """
         print('==> Now using ' + self.opt.MODEL + '_' + self.opt.PROCESS_ID)
         print('==> Loading model ...')
         if not map_location:
@@ -68,9 +84,17 @@ class BasicModule(nn.Module):
             print("==> Load existing model: %s" % temp_model_name)
         else:
             print("==> The model you want to load (%s) doesn't exist!" % temp_model_name)
-        # return self, pre_epoch, self.best_loss
 
     def save(self, epoch, loss, name=None):
+        """
+        Save the current model.
+        :param epoch:The current epoch (sum up). This will be together saved to file,
+            aimed to keep tensorboard curve a continuous line when you train the net
+            several times.
+        :param loss:Current loss.
+        :param name:The name of your saving file.
+        :return:None
+        """
         if loss < self.best_loss:
             self.best_loss = loss
         if self.opt is None:
@@ -93,9 +117,17 @@ class BasicModule(nn.Module):
             'state_dict': state_dict,
             'best_loss': self.best_loss
         }, path)
-        return path
 
     def mt_save(self, epoch, loss):
+        """
+        Save the model with a new thread. You can use this method in stead of self.save to
+        save your model while not interrupting the training process, since saving big file
+        is a time-consuming task.
+        Also, this method will automatically record your best model and make a copy of it.
+        :param epoch: Current loss.
+        :param loss:
+        :return:
+        """
         if self.opt.SAVE_BEST_MODEL and loss < self.best_loss:
             print("==> Your best model is renewed")
         if len(self.threads) > 0:
@@ -107,6 +139,10 @@ class BasicModule(nn.Module):
             self.best_loss = loss
 
     def _get_optimizer(self):
+        """
+        Get your optimizer by parsing your opts.
+        :return:Optimizer.
+        """
         if self.opt.OPTIMIZER == "Adam":
             optimizer = torch.optim.Adam(self.parameters(), lr=self.opt.LEARNING_RATE)
         else:
@@ -114,7 +150,11 @@ class BasicModule(nn.Module):
         return optimizer
 
     def to_multi(self):
-        # Data Parallelism
+        """
+        If you have multiple GPUs and you want to use them at the same time, you should
+        call this method before training to send your model and data to multiple GPUs.
+        :return: None
+        """
         if torch.cuda.is_available():
             print("==> Using", torch.cuda.device_count(), "GPUs.")
             if torch.cuda.device_count() > 1:
@@ -126,6 +166,11 @@ class BasicModule(nn.Module):
         print(self)
 
     def validate(self, test_loader):
+        """
+        Validate your model.
+        :param test_loader: A DataLoader class instance, which includes your validation data.
+        :return: test loss and test accuracy.
+        """
         self.eval()
         test_loss = 0
         test_acc = 0
@@ -145,6 +190,12 @@ class BasicModule(nn.Module):
         return test_loss / self.opt.NUM_TEST, test_acc / self.opt.NUM_TEST
 
     def predict(self, test_loader):
+        """
+        Make prediction based on your trained model. Please make sure you have trained
+        your model or load the previous model from file.
+        :param test_loader: A DataLoader class instance, which includes your test data.
+        :return: Prediction made.
+        """
         self.eval()
         for i, data in tqdm(enumerate(test_loader), desc="Testing", total=len(test_loader), leave=False, unit='b'):
             inputs, *_ = data
@@ -154,6 +205,13 @@ class BasicModule(nn.Module):
         return predicts
 
     def fit(self, train_loader, test_loader):
+        """
+        Training process. You can use this function to train your model. All configurations
+        are defined and can be modified in config.py.
+        :param train_loader: A DataLoader class instance, which includes your train data.
+        :param test_loader: A DataLoader class instance, which includes your test data.
+        :return: None.
+        """
         optimizer = self._get_optimizer()
         for epoch in range(self.opt.NUM_EPOCHS):
             train_loss = 0
