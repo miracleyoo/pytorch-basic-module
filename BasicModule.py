@@ -3,13 +3,26 @@
 # Email : mirakuruyoo@gmail.com
 
 import os
-import torch
+import pickle
 import shutil
-import torch.nn as nn
 import threading
-from tqdm import tqdm
+import time
+
+import numpy as np
+import torch
+import torch.nn as nn
 from tensorboardX import SummaryWriter
+from tqdm import tqdm
+
 lock = threading.Lock()
+
+
+def log(*args, end=None):
+    if end is None:
+        print(time.strftime("==> [%Y-%m-%d %H:%M:%S]", time.localtime()) + " " + "".join([str(s) for s in args]))
+    else:
+        print(time.strftime("==> [%Y-%m-%d %H:%M:%S]", time.localtime()) + " " + "".join([str(s) for s in args]),
+              end=end)
 
 
 class MyThread(threading.Thread):
@@ -17,6 +30,7 @@ class MyThread(threading.Thread):
         Multi-thread support class. Used for multi-thread model
         file saving.
     """
+
     def __init__(self, opt, net, epoch, bs_old, loss):
         threading.Thread.__init__(self)
         self.opt = opt
@@ -47,6 +61,7 @@ class BasicModule(nn.Module):
         such as load, save, multi-thread save, parallel distribution, train, validate,
         predict and so on.
     """
+
     def __init__(self, opt=None, device=None):
         super(BasicModule, self).__init__()
         self.model_name = self.__class__.__name__
@@ -60,7 +75,7 @@ class BasicModule(nn.Module):
             self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.writer = SummaryWriter(opt.SUMMARY_PATH)
 
-    def load(self, model_type: str="temp_model.dat", map_location=None)->None:
+    def load(self, model_type: str = "temp_model.dat", map_location=None) -> None:
         """
             Load the existing model.
             :param model_type: temp model or best model.
@@ -68,8 +83,8 @@ class BasicModule(nn.Module):
                 For loading the model file dumped from gpu or cpu.
             :return: None.
         """
-        print('==> Now using ' + self.opt.MODEL + '_' + self.opt.PROCESS_ID)
-        print('==> Loading model ...')
+        log('Now using ' + self.opt.MODEL + '_' + self.opt.PROCESS_ID)
+        log('Loading model ...')
         if not map_location:
             map_location = self.device.type
         net_save_prefix = self.opt.NET_SAVE_PATH + self.opt.MODEL + '_' + self.opt.PROCESS_ID + '/'
@@ -81,9 +96,9 @@ class BasicModule(nn.Module):
             self.pre_epoch = checkpoint['epoch']
             self.best_loss = checkpoint['best_loss']
             self.load_state_dict(checkpoint['state_dict'])
-            print("==> Load existing model: %s" % temp_model_name)
+            log("Load existing model: %s" % temp_model_name)
         else:
-            print("==> The model you want to load (%s) doesn't exist!" % temp_model_name)
+            log("The model you want to load (%s) doesn't exist!" % temp_model_name)
 
     def save(self, epoch, loss, name=None):
         """
@@ -126,16 +141,16 @@ class BasicModule(nn.Module):
         Also, this method will automatically record your best model and make a copy of it.
         :param epoch: Current loss.
         :param loss:
-        :return:
+        :return: None
         """
         if self.opt.SAVE_BEST_MODEL and loss < self.best_loss:
-            print("==> Your best model is renewed")
+            log("Your best model is renewed")
         if len(self.threads) > 0:
             self.threads[-1].join()
         self.threads.append(MyThread(self.opt, self, epoch, self.best_loss, loss))
         self.threads[-1].start()
         if self.opt.SAVE_BEST_MODEL and loss < self.best_loss:
-            print("==> Your best model is renewed")
+            log("Your best model is renewed")
             self.best_loss = loss
 
     def _get_optimizer(self):
@@ -156,62 +171,71 @@ class BasicModule(nn.Module):
         :return: None
         """
         if torch.cuda.is_available():
-            print("==> Using", torch.cuda.device_count(), "GPUs.")
+            log("Using", torch.cuda.device_count(), "GPUs.")
             if torch.cuda.device_count() > 1:
                 self = torch.nn.DataParallel(self)
-                print("==> Using data parallelism.")
+                attrs_p = [meth for meth in dir(self) if not meth.startswith('_')]
+                attrs = [meth for meth in dir(self.module) if not meth.startswith('_') and meth not in attrs_p]
+                for attr in attrs:
+                    setattr(self, attr, getattr(self.module, attr))
+                log("Using data parallelism.")
         else:
-            print("==> Using CPU now.")
+            log("Using CPU now.")
         self.to(self.device)
         print(self)
 
-    def validate(self, test_loader):
+    def validate(self, eval_loader):
         """
         Validate your model.
-        :param test_loader: A DataLoader class instance, which includes your validation data.
-        :return: test loss and test accuracy.
+        :param eval_loader: A DataLoader class instance, which includes your validation data.
+        :return: eval loss and eval accuracy.
         """
         self.eval()
-        test_loss = 0
-        test_acc = 0
-        for i, data in tqdm(enumerate(test_loader), desc="Testing", total=len(test_loader), leave=False, unit='b'):
+        eval_loss = 0
+        eval_acc = 0
+        for i, data in tqdm(enumerate(eval_loader), desc="Evaluating", total=len(eval_loader), leave=False, unit='b'):
             inputs, labels, *_ = data
             inputs, labels = inputs.to(self.device), labels.to(self.device)
 
             # Compute the outputs and judge correct
             outputs = self(inputs)
             loss = self.opt.CRITERION(outputs, labels)
-            test_loss += loss.item()
+            eval_loss += loss.item()
 
             predicts = outputs.sort(descending=True)[1][:, :self.opt.TOP_NUM]
             for predict, label in zip(predicts.tolist(), labels.cpu().tolist()):
                 if label in predict:
-                    test_acc += 1
-        return test_loss / self.opt.NUM_TEST, test_acc / self.opt.NUM_TEST
+                    eval_acc += 1
+        return eval_loss / self.opt.NUM_EVAL, eval_acc / self.opt.NUM_EVAL
 
-    def predict(self, test_loader):
+    def predict(self, eval_loader):
         """
         Make prediction based on your trained model. Please make sure you have trained
         your model or load the previous model from file.
         :param test_loader: A DataLoader class instance, which includes your test data.
         :return: Prediction made.
         """
+        recorder = []
+        log("Start predicting...")
         self.eval()
-        for i, data in tqdm(enumerate(test_loader), desc="Testing", total=len(test_loader), leave=False, unit='b'):
+        for i, data in tqdm(enumerate(eval_loader), desc="Evaluating", total=len(eval_loader), leave=False, unit='b'):
             inputs, *_ = data
             inputs = inputs.to(self.device)
             outputs = self(inputs)
             predicts = outputs.sort(descending=True)[1][:, :self.opt.TOP_NUM]
+            recorder.extend(np.array(outputs.sort(descending=True)[1]))
+            pickle.dump(np.concatenate(recorder, 0), open("./source/test_res.pkl", "wb+"))
         return predicts
 
-    def fit(self, train_loader, test_loader):
+    def fit(self, train_loader, eval_loader):
         """
         Training process. You can use this function to train your model. All configurations
         are defined and can be modified in config.py.
         :param train_loader: A DataLoader class instance, which includes your train data.
-        :param test_loader: A DataLoader class instance, which includes your test data.
+        :param eval_loader: A DataLoader class instance, which includes your test data.
         :return: None.
         """
+        log("Start training...")
         optimizer = self._get_optimizer()
         for epoch in range(self.opt.NUM_EPOCHS):
             train_loss = 0
@@ -219,7 +243,7 @@ class BasicModule(nn.Module):
 
             # Start training
             self.train()
-            print('==> Preparing Data ...')
+            log('Preparing Data ...')
             for i, data in tqdm(enumerate(train_loader), desc="Training", total=len(train_loader), leave=False,
                                 unit='b'):
                 inputs, labels, *_ = data
@@ -243,21 +267,21 @@ class BasicModule(nn.Module):
             train_acc = train_acc / self.opt.NUM_TRAIN
 
             # Start testing
-            test_loss, test_acc = self.validate(test_loader)
+            eval_loss, eval_acc = self.validate(eval_loader)
 
             # Add summary to tensorboard
             self.writer.add_scalar("Train/loss", train_loss, epoch + self.pre_epoch)
             self.writer.add_scalar("Train/acc", train_acc, epoch + self.pre_epoch)
-            self.writer.add_scalar("Test/loss", test_loss, epoch + self.pre_epoch)
-            self.writer.add_scalar("Test/acc", test_acc, epoch + self.pre_epoch)
+            self.writer.add_scalar("Eval/loss", eval_loss, epoch + self.pre_epoch)
+            self.writer.add_scalar("Eval/acc", eval_acc, epoch + self.pre_epoch)
 
             # Output results
-            print('Epoch [%d/%d], Train Loss: %.4f, Train Acc: %.4f, Test Loss: %.4f, Test Acc:%.4f'
+            print('Epoch [%d/%d], Train Loss: %.4f, Train Acc: %.4f, Eval Loss: %.4f, Eval Acc:%.4f'
                   % (self.pre_epoch + epoch + 1, self.pre_epoch + self.opt.NUM_EPOCHS + 1,
-                     train_loss, train_acc, test_loss, test_acc))
+                     train_loss, train_acc, eval_loss, eval_acc))
 
             # Save the model
             if epoch % self.opt.SAVE_EVERY == 0:
-                self.mt_save(self.pre_epoch + epoch + 1, test_loss / self.opt.NUM_TEST)
+                self.mt_save(self.pre_epoch + epoch + 1, eval_loss / self.opt.NUM_EVAL)
 
-        print('==> Training Finished.')
+        log('Training Finished.')
