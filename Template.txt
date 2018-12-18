@@ -1,0 +1,34 @@
+
+# Model Testing Record Form
+
+| Item Name        | Value           |
+| ---------        | -----------     |
+| Tester's Name    | Zhongyang Zhang |
+| Author's Name    | Zhongyang Zhang |
+| Framework        | Pytorch         |
+| Model Name       | %s              |
+| Running Time     | %s              |
+| Server Name      | %s              |
+| Training Epoch   | %d              |
+| Highest Val Acc  | %.4f            |
+| Last epoch val acc    | %.4f       |
+| Last epoch val loss   | %.4f       |
+| Last epoch train acc  | %.4f       |
+| Last epoch train loss | %.4f       |
+| Train Dataset Path    | %s         |
+| Test Dataset Path     | %s         |
+| Class Number     | %d              |
+| Criterion        | %s              |
+| Optimizer        | %s              |
+| Learning Rate    | %.4f            |
+
+## Configs
+
+%s
+
+## Net Structure
+
+```
+%s
+```
+        
