@@ -96,7 +96,7 @@ def fit(net, train_loader, val_loader):
         train_acc = train_acc / net.opt.NUM_TRAIN
 
         # Start testing
-        val_loss, val_acc = net.validate(val_loader)
+        val_loss, val_acc = validate(net, val_loader)
 
         # Add summary to tensorboard
         net.writer.add_scalar("Train/loss", train_loss, epoch + net.epoch_fin)
