@@ -7,7 +7,6 @@ import datetime
 import os
 import socket
 
-import torch
 import torch.nn as nn
 from tensorboardX import SummaryWriter
 
@@ -29,6 +28,7 @@ class BasicModule(nn.Module):
         self.best_loss = 1e8
         self.epoch_fin = 0
         self.threads = []
+        self.classes = []
         self.server_name = socket.getfqdn(socket.gethostname())
         if device:
             self.device = device
@@ -59,11 +59,12 @@ class BasicModule(nn.Module):
             self.best_loss = checkpoint['best_loss']
             self.history = checkpoint['history']
             self.load_state_dict(checkpoint['state_dict'])
+            self.classes = checkpoint['classes']
             log("Load existing model: %s" % temp_model_name)
         else:
             log("The model you want to load (%s) doesn't exist!" % temp_model_name)
 
-    def save(self, epoch, loss, name=None):
+    def save(self, epoch, name=None):
         """
         Save the current model.
         :param epoch:The current epoch (sum up). This will be together saved to file,
@@ -73,8 +74,6 @@ class BasicModule(nn.Module):
         :param name:The name of your saving file.
         :return:None
         """
-        if loss < self.best_loss:
-            self.best_loss = loss
         if self.opt is None:
             prefix = "./source/trained_net/" + self.model_name + "/"
         else:
@@ -93,11 +92,11 @@ class BasicModule(nn.Module):
         torch.save({
             'epoch': epoch + 1,
             'state_dict': state_dict,
-            'best_loss': self.best_loss,
-            'history': self.history
+            'history': self.history,
+            'classes': self.classes
         }, path)
 
-    def mt_save(self, epoch, loss):
+    def mt_save(self, epoch):
         """
         Save the model with a new thread. You can use this method in stead of self.save to
         save your model while not interrupting the training process, since saving big file
@@ -107,23 +106,20 @@ class BasicModule(nn.Module):
         :param loss:
         :return: None
         """
-        if self.opt.SAVE_BEST_MODEL and loss < self.best_loss:
-            log("Your best model is renewed")
         if len(self.threads) > 0:
             self.threads[-1].join()
-        self.threads.append(MyThread(self.opt, self, epoch, self.best_loss, loss))
+        self.threads.append(MyThread(self, epoch))
         self.threads[-1].start()
-        if self.opt.SAVE_BEST_MODEL and loss < self.best_loss:
-            log("Your best model is renewed")
-            self.best_loss = loss
 
     def get_optimizer(self):
         """
         Get your optimizer by parsing your opts.
         :return:Optimizer.
         """
-        if self.opt.OPTIMIZER == "Adam":
+        if self.opt.OPTIMIZER.lower() == "adam":
             optimizer = torch.optim.Adam(self.parameters(), lr=self.opt.LEARNING_RATE)
+        elif self.opt.OPTIMIZER.lower() == "sgd":
+            optimizer = torch.optim.SGD(self.parameters(), lr=self.opt.LEARNING_RATE, momentum=self.opt.MOMENTUM)
         else:
             raise KeyError("==> The optimizer defined in your config file is not supported!")
         return optimizer
@@ -137,16 +133,16 @@ class BasicModule(nn.Module):
         if torch.cuda.is_available():
             log("Using", torch.cuda.device_count(), "GPUs.")
             if torch.cuda.device_count() > 1:
-                pmodel = torch.nn.DataParallel(self)
-                attrs_p = [meth for meth in dir(pmodel) if not meth.startswith('_')]
-                attrs = [meth for meth in dir(self) if not meth.startswith('_') and meth not in attrs_p]
+                self = torch.nn.DataParallel(self)
+                attrs_p = [meth for meth in dir(self) if not meth.startswith('_')]
+                attrs = [meth for meth in dir(self.module) if not meth.startswith('_') and meth not in attrs_p]
                 for attr in attrs:
-                    setattr(pmodel, attr, getattr(self, attr))
+                    setattr(self, attr, getattr(self.module, attr))
                 log("Using data parallelism.")
         else:
             log("Using CPU now.")
-        pmodel.to(self.device)
-        return pmodel
+        self.to(self.device)
+        return self
 
     def plot_history(self, figsize=(20, 9)):
         import matplotlib.pyplot as plt
@@ -161,6 +157,15 @@ class BasicModule(nn.Module):
             plt.show()
         else:
             f.savefig(os.path.join(self.opt.SUMMARY_PATH + "history_output.jpg"))
+
+    def add_summary_graph(self):
+        # Instantiation of tensorboard and add net graph to it
+        log("Adding summaries...")
+        dummy_input = torch.rand(self.opt.BATCH_SIZE, *self.opt.TENSOR_SHAPE).to(self.device)
+        try:
+            self.writer.add_graph(self, dummy_input)
+        except KeyError:
+            self.writer.add_graph(self.module, dummy_input)
 
     def write_summary(self):
         current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
