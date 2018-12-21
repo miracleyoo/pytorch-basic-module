@@ -192,7 +192,7 @@ class BasicModule(nn.Module):
                 sum(self.history['train_acc']) / len(self.history['train_acc']),
                 sum(self.history['train_loss']) / len(self.history['train_loss']),
                 os.path.basename(self.opt.TRAIN_PATH),
-                os.path.basename(self.opt.EVAL_PATH),
+                os.path.basename(self.opt.VAL_PATH),
                 self.opt.NUM_CLASSES,
                 self.opt.CRITERION.__class__.__name__,
                 self.opt.OPTIMIZER,
